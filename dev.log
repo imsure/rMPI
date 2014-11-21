@@ -1,0 +1,2 @@
+11/20/2014: Generate MPI wrappers;
+	    Intercept MPI_Comm_rank and MPI_Comm_size; 
