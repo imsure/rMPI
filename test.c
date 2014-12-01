@@ -18,11 +18,14 @@ int main( int argc, char *argv[] )
 
   if ( myrank == 0 ) {
     MPI_Get_version( &version, &subversion );
-    printf( "MPI standard version: %d.%d\n", version, subversion );
-    printf( "Number of task: %d\n", numtasks );
+    //printf( "MPI standard version: %d.%d\n", version, subversion );
+    //printf( "Number of task: %d\n", numtasks );
   }
 
-  printf( "Rank %d is running on %s\n", myrank, hostname );
+  //printf( "Rank %d is running on %s\n", myrank, hostname );
+
+  /* Test MPI_Barrier */
+  //MPI_Barrier( MPI_COMM_WORLD );
 
   MPI_Finalize();
 }
