@@ -4,28 +4,47 @@
 
 #include "mpi.h"
 #include <stdio.h>
+#include <unistd.h>
 
 int main( int argc, char *argv[] )
 {
-  int numtasks, myrank, len;
-  char hostname[ MPI_MAX_PROCESSOR_NAME ];
-  int version, subversion;
+  int numtasks, myrank, msg;
 
   MPI_Init( &argc, &argv ); // must be called and should be called only once
   MPI_Comm_size( MPI_COMM_WORLD, &numtasks ); // get number of MPI tasks
   MPI_Comm_rank( MPI_COMM_WORLD, &myrank ); // get MPI rank for current MPI task
-  MPI_Get_processor_name( hostname, &len ); // get processor name running current MPI task
 
   if ( myrank == 0 ) {
-    MPI_Get_version( &version, &subversion );
-    //printf( "MPI standard version: %d.%d\n", version, subversion );
-    //printf( "Number of task: %d\n", numtasks );
+    msg = 99;
+    MPI_Send( &msg, 1, MPI_INT, 1, 5, MPI_COMM_WORLD );
+  } else {
+    MPI_Recv( &msg, 1, MPI_INT, 0, 5, MPI_COMM_WORLD, MPI_STATUS_IGNORE );
+    printf( "Rank %d receives %d from rank 0.\n", myrank, msg );
   }
 
-  //printf( "Rank %d is running on %s\n", myrank, hostname );
+  //  MPI_Pcontrol( 3 ); // kill a replica
+  MPI_Pcontrol( 1 ); // kill a primary rank
+  //MPI_Pcontrol( 2 ); // kill a replica rank
+  MPI_Barrier( MPI_COMM_WORLD );
 
-  /* Test MPI_Barrier */
-  //MPI_Barrier( MPI_COMM_WORLD );
+  if ( myrank == 0 ) {
+    msg = 9999;
+    MPI_Send( &msg, 1, MPI_INT, 1, 5, MPI_COMM_WORLD );
+  } else {
+    MPI_Recv( &msg, 1, MPI_INT, 0, 5, MPI_COMM_WORLD, MPI_STATUS_IGNORE );
+    printf( "Rank %d receives %d from rank 0.\n", myrank, msg );
+  }
 
+  MPI_Pcontrol( 2 ); // kill a replica rank
+  MPI_Barrier( MPI_COMM_WORLD );
+
+  if ( myrank == 1 ) {
+    msg = 1234;
+    MPI_Send( &msg, 1, MPI_INT, 0, 5, MPI_COMM_WORLD );
+  } else {
+    MPI_Recv( &msg, 1, MPI_INT, 1, 5, MPI_COMM_WORLD, MPI_STATUS_IGNORE );
+    printf( "Rank %d receives %d from rank 1.\n", myrank, msg );
+  }
+   
   MPI_Finalize();
 }
