@@ -28,7 +28,7 @@ _EXTERN_C_ void *MPIR_ToPointer(int);
 #endif /* PIC */
 
 #define NDEBUG
-#undef NDEBUG
+//#undef NDEBUG
 
 #ifdef NDEBUG
 #define Debug(M, ...)
@@ -36,8 +36,10 @@ _EXTERN_C_ void *MPIR_ToPointer(int);
 #define Debug(M, ...) fprintf( stderr, "DEBUG: %s:%d: " M "\n", __FUNCTION__, __LINE__, ##__VA_ARGS__ )
 #endif
 
+/* Tag specific */
 #define RED_TAG_MASK 0x1 << 11 // tag mask for redundant messages
 #define TAG_Barrier 0xff // for MPI_Barrier only
+#define TAG_META 0xfe // for leader(primary) and replica to exchange meta-data
 
 /* Global variables */
 MPI_Comm primary_comm; // communicator for primary ranks
@@ -47,6 +49,7 @@ int num_phy_ranks;
 int user_rank; // rank seen by users
 int phy_rank; // physical rank
 int *rank_states; // array for rank states, 1 is alive, 0 is dead.
+char is_leader; // 'Y': is the leader; 'N': not the leader
 
 /* Return whether or not the current rank is a primary rank
    or a replica rank. */
@@ -109,6 +112,13 @@ _EXTERN_C_ int MPI_Init(int *argc, char ***argv) {
     rank_states[ i ] = 1; // all alive initially
   }
 
+  // assign primary ranks as leaders initially
+  if ( is_primary(phy_rank) ) {
+    is_leader = 'Y';
+  } else {
+    is_leader = 'N';
+  }
+
   return _wrap_py_return_val;
 }
 
@@ -147,7 +157,8 @@ _EXTERN_C_ int MPI_Send(void *buf, int count, MPI_Datatype datatype, int dest, i
 _EXTERN_C_ int PMPI_Recv(void *buf, int count, MPI_Datatype datatype, int source, int tag, MPI_Comm comm, MPI_Status *status);
 _EXTERN_C_ int MPI_Recv(void *buf, int count, MPI_Datatype datatype, int source, int tag, MPI_Comm comm, MPI_Status *status) { 
   int _wrap_py_return_val = 0;
-  int source_replica = get_replica_rank(source);
+  int source_replica;
+  int matching_src = -1; // hold the source which sent the message to the leader first
 
   /* check aliveness */
   if ( !is_alive(phy_rank) ) {
@@ -156,13 +167,70 @@ _EXTERN_C_ int MPI_Recv(void *buf, int count, MPI_Datatype datatype, int source,
   }
 
   /* Mirror Protocol */
-  if ( is_alive(source) ) { // post a recv for primary source 
-    _wrap_py_return_val = PMPI_Recv(buf, count, datatype, source, tag, comm, status);
-    Debug( "rank %d ===> rank %d\ttag: 0x%x", source, phy_rank, tag );
-  }
-  if ( is_alive(source_replica) ) { // post a recv for replica of source
-    _wrap_py_return_val = PMPI_Recv(buf, count, datatype, source_replica, mask_red_tag(tag), comm, status);
-    Debug( "rank %d ===> rank %d\ttag: 0x%x", source_replica, phy_rank, mask_red_tag(tag) );
+  if ( source == MPI_ANY_SOURCE ) {
+    MPI_Status tmp_status; // in case 'status' passed by caller is NULL
+    Debug( "Processing MPI_ANY_SOURCE ......" );
+    
+    if ( is_primary(phy_rank) ) { // leader is also the primary rank
+      int replica_rank = get_replica_rank( user_rank );
+      // post a recv for any source. it must be from primary rank because redundant message's tag must be masked.
+      _wrap_py_return_val = PMPI_Recv(buf, count, datatype, source, tag, comm, &tmp_status);
+      if ( status != NULL ) {
+	*status = tmp_status; // setting status if it is not null
+	Debug( "status->MPI_SOURCE = %d\n", status->MPI_SOURCE );
+      }
+      matching_src = tmp_status.MPI_SOURCE; // get the source rank first arrived.
+      Debug( "Leader %d <=== Matching sender(MPI_ANY_SOURCE) %d", phy_rank, matching_src );
+
+      if ( is_alive(replica_rank) ) {
+	// send metadata to replica of the leader
+	_wrap_py_return_val = PMPI_Send( &matching_src, 1, MPI_INT, replica_rank, TAG_META, MPI_COMM_WORLD );
+	Debug( "Leader rank %d ===> replica %d, matching sender of MPI_ANY_SOURCE: %d",
+	       phy_rank, replica_rank, matching_src );
+      }
+      // receive from the replica of 'matching_src' if the replica is alive
+      if ( is_alive(get_replica_rank(matching_src)) ) {
+	_wrap_py_return_val = PMPI_Recv(buf, count, datatype, get_replica_rank(matching_src),
+					mask_red_tag(tag), comm, status);
+      }
+    } else { // non-leader: replica
+      // first check if the leader is alive
+      if ( is_alive(user_rank) ) {
+	// post a recv to get the matching sender from the leader
+	_wrap_py_return_val = PMPI_Recv( &matching_src, 1, MPI_INT, user_rank, TAG_META, MPI_COMM_WORLD, status );
+	Debug( "replica %d <=== leader rank %d, matching sender of MPI_ANY_SOURCE: %d",
+	       phy_rank, user_rank, matching_src );
+	// recv data from the matching sender
+	_wrap_py_return_val = PMPI_Recv(buf, count, datatype, matching_src, tag, comm, status);
+	
+	// receive from the replica of 'matching_src' if the replica is alive
+	if ( is_alive(get_replica_rank(matching_src)) ) {
+	  _wrap_py_return_val = PMPI_Recv(buf, count, datatype, get_replica_rank(matching_src),
+					  mask_red_tag(tag), comm, status);
+	}
+      } else { // leader already died, replica will do the leader's work except no meta-data needs to be sent.
+	// post a recv for any source. it must be from primary rank because redundant message's tag must be masked.
+	_wrap_py_return_val = PMPI_Recv(buf, count, datatype, source, tag, comm, &tmp_status);
+	matching_src = tmp_status.MPI_SOURCE; // get the source rank first arrived.
+
+	// receive from the replica of 'matching_src' if the replica is alive
+	if ( is_alive(get_replica_rank(matching_src)) ) {
+	  _wrap_py_return_val = PMPI_Recv(buf, count, datatype, get_replica_rank(matching_src),
+					  mask_red_tag(tag), comm, status);
+	  Debug( "Matching sender %d <=== replica rank %d", matching_src, phy_rank );
+	}
+      }
+    }
+  } else { // normal case: source != MPI_ANY_SOURCE
+    source_replica = get_replica_rank(source);
+    if ( is_alive(source) ) { // post a recv for primary source 
+      _wrap_py_return_val = PMPI_Recv(buf, count, datatype, source, tag, comm, status);
+      Debug( "rank %d <=== rank %d\ttag: 0x%x", phy_rank, source, tag );
+    }
+    if ( is_alive(source_replica) ) { // post a recv for replica of source
+      _wrap_py_return_val = PMPI_Recv(buf, count, datatype, source_replica, mask_red_tag(tag), comm, status);
+      Debug( "rank %d <=== rank %d\ttag: 0x%x", phy_rank, source_replica, mask_red_tag(tag) );
+    }
   }
   
   return _wrap_py_return_val;
