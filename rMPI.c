@@ -135,8 +135,10 @@ _EXTERN_C_ int MPI_Send(void *buf, int count, MPI_Datatype datatype, int dest, i
   }
 
   /* Mirror Protocol */
-  if ( !is_primary(phy_rank) ) {
-    tag = mask_red_tag(tag);
+  if ( !is_primary(phy_rank) && is_alive(user_rank) ) {
+    // only do this when the primary is alive because if not, the message
+    // from replica is not redundant.
+    tag = mask_red_tag(tag); 
   }
   
   if ( is_alive(dest) ) { // send to primary dest
@@ -177,7 +179,6 @@ _EXTERN_C_ int MPI_Recv(void *buf, int count, MPI_Datatype datatype, int source,
       _wrap_py_return_val = PMPI_Recv(buf, count, datatype, source, tag, comm, &tmp_status);
       if ( status != NULL ) {
 	*status = tmp_status; // setting status if it is not null
-	Debug( "status->MPI_SOURCE = %d\n", status->MPI_SOURCE );
       }
       matching_src = tmp_status.MPI_SOURCE; // get the source rank first arrived.
       Debug( "Leader %d <=== Matching sender(MPI_ANY_SOURCE) %d", phy_rank, matching_src );
@@ -188,10 +189,13 @@ _EXTERN_C_ int MPI_Recv(void *buf, int count, MPI_Datatype datatype, int source,
 	Debug( "Leader rank %d ===> replica %d, matching sender of MPI_ANY_SOURCE: %d",
 	       phy_rank, replica_rank, matching_src );
       }
-      // receive from the replica of 'matching_src' if the replica is alive
-      if ( is_alive(get_replica_rank(matching_src)) ) {
-	_wrap_py_return_val = PMPI_Recv(buf, count, datatype, get_replica_rank(matching_src),
-					mask_red_tag(tag), comm, status);
+
+      if ( is_primary(matching_src) ) {
+	// receive from the replica of 'matching_src' if the replica is alive
+	if ( is_alive(get_replica_rank(matching_src)) ) { 
+	  _wrap_py_return_val = PMPI_Recv(buf, count, datatype, get_replica_rank(matching_src),
+					  mask_red_tag(tag), comm, status);
+	}
       }
     } else { // non-leader: replica
       // first check if the leader is alive
@@ -202,22 +206,29 @@ _EXTERN_C_ int MPI_Recv(void *buf, int count, MPI_Datatype datatype, int source,
 	       phy_rank, user_rank, matching_src );
 	// recv data from the matching sender
 	_wrap_py_return_val = PMPI_Recv(buf, count, datatype, matching_src, tag, comm, status);
-	
+
+	if ( is_primary(matching_src) ) {
 	// receive from the replica of 'matching_src' if the replica is alive
-	if ( is_alive(get_replica_rank(matching_src)) ) {
-	  _wrap_py_return_val = PMPI_Recv(buf, count, datatype, get_replica_rank(matching_src),
-					  mask_red_tag(tag), comm, status);
+	  if ( is_alive(get_replica_rank(matching_src)) ) {
+	    _wrap_py_return_val = PMPI_Recv(buf, count, datatype, get_replica_rank(matching_src),
+					    mask_red_tag(tag), comm, status);
+	  }
 	}
       } else { // leader already died, replica will do the leader's work except no meta-data needs to be sent.
 	// post a recv for any source. it must be from primary rank because redundant message's tag must be masked.
 	_wrap_py_return_val = PMPI_Recv(buf, count, datatype, source, tag, comm, &tmp_status);
 	matching_src = tmp_status.MPI_SOURCE; // get the source rank first arrived.
+	if ( status != NULL ) {
+	  *status = tmp_status; // setting status if it is not null
+	}
 
-	// receive from the replica of 'matching_src' if the replica is alive
-	if ( is_alive(get_replica_rank(matching_src)) ) {
-	  _wrap_py_return_val = PMPI_Recv(buf, count, datatype, get_replica_rank(matching_src),
-					  mask_red_tag(tag), comm, status);
-	  Debug( "Matching sender %d <=== replica rank %d", matching_src, phy_rank );
+	if ( is_primary(matching_src) ) {
+	  // receive from the replica of 'matching_src' if the replica is alive
+	  if ( is_alive(get_replica_rank(matching_src)) ) {
+	    _wrap_py_return_val = PMPI_Recv(buf, count, datatype, get_replica_rank(matching_src),
+					    mask_red_tag(tag), comm, status);
+	    Debug( "Matching sender %d <=== replica rank %d", matching_src, phy_rank );
+	  }
 	}
       }
     }
@@ -226,9 +237,10 @@ _EXTERN_C_ int MPI_Recv(void *buf, int count, MPI_Datatype datatype, int source,
     if ( is_alive(source) ) { // post a recv for primary source 
       _wrap_py_return_val = PMPI_Recv(buf, count, datatype, source, tag, comm, status);
       Debug( "rank %d <=== rank %d\ttag: 0x%x", phy_rank, source, tag );
+      tag = mask_red_tag( tag ); // only mask the tag when the primary rank is alive
     }
     if ( is_alive(source_replica) ) { // post a recv for replica of source
-      _wrap_py_return_val = PMPI_Recv(buf, count, datatype, source_replica, mask_red_tag(tag), comm, status);
+      _wrap_py_return_val = PMPI_Recv(buf, count, datatype, source_replica, tag, comm, status);
       Debug( "rank %d <=== rank %d\ttag: 0x%x", phy_rank, source_replica, mask_red_tag(tag) );
     }
   }
