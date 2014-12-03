@@ -28,7 +28,7 @@ _EXTERN_C_ void *MPIR_ToPointer(int);
 #endif /* PIC */
 
 #define NDEBUG
-//#undef NDEBUG
+#undef NDEBUG
 
 #ifdef NDEBUG
 #define Debug(M, ...)
@@ -49,7 +49,6 @@ int num_phy_ranks;
 int user_rank; // rank seen by users
 int phy_rank; // physical rank
 int *rank_states; // array for rank states, 1 is alive, 0 is dead.
-char is_leader; // 'Y': is the leader; 'N': not the leader
 
 /* Return whether or not the current rank is a primary rank
    or a replica rank. */
@@ -194,6 +193,90 @@ static int Mirror_Recv(void *buf, int count, MPI_Datatype datatype, int source, 
   }
 }
 
+/**
+ * Parallel protocol --- MPI_Send
+ */
+static int Parallel_Send(void *buf, int count, MPI_Datatype datatype, int dest, int tag, MPI_Comm comm)
+{
+  int _wrap_py_return_val = 0;
+  int dest_replica = get_replica_rank( dest );
+
+  if ( is_primary(phy_rank) ) {
+    if ( is_alive(get_replica_rank(phy_rank)) ) { // replica partner is alive
+      if ( is_alive(dest) ) {
+	// primary ===> primary
+	_wrap_py_return_val = PMPI_Send(buf, count, datatype, dest, tag, MPI_COMM_WORLD);
+	Debug( "Parallel Protocol: rank %d ===> rank %d", phy_rank, dest );
+      } else { // dest died, send a dest's replica instead
+	// primary ===> replica
+	_wrap_py_return_val = PMPI_Send(buf, count, datatype, dest_replica, tag, MPI_COMM_WORLD);
+	Debug( "Parallel Protocol: rank %d ===> rank %d", phy_rank, dest_replica );
+      }
+
+      /* TODO: sync with replica */
+      
+    } else { // if replica died, degrade to mirror protocol
+      	_wrap_py_return_val = Mirror_Send(buf, count, datatype, dest, tag, MPI_COMM_WORLD);
+    }
+  } else { // replica of the primary sender
+    if ( is_alive(user_rank) ) { // primary partner is alive
+      if ( is_alive(dest_replica) ) {
+	// replica ===> replica
+	_wrap_py_return_val = PMPI_Send(buf, count, datatype, dest_replica, tag, MPI_COMM_WORLD);
+	Debug( "Parallel Protocol: rank %d ===> rank %d", phy_rank, dest_replica );
+      } else { // replica of dest died, send to dest instead
+	// replica ===> primary
+	_wrap_py_return_val = PMPI_Send(buf, count, datatype, dest, tag, MPI_COMM_WORLD);
+	Debug( "Parallel Protocol: rank %d ===> rank %d", phy_rank, dest );
+      }
+    } else { // if primary died, degrade to mirror protocol
+      	_wrap_py_return_val = Mirror_Send(buf, count, datatype, dest, tag, MPI_COMM_WORLD);
+    }
+  }
+    return _wrap_py_return_val;
+}
+
+/**
+ * Parallel protocol --- MPI_Recv
+ */
+static int Parallel_Recv(void *buf, int count, MPI_Datatype datatype, int source, int tag, MPI_Comm comm, MPI_Status *status)
+{
+  int _wrap_py_return_val = 0;
+  int matching_src = -1; // hold the source which sent the message to the leader first
+  int source_replica = get_replica_rank( source );
+
+  if ( is_primary(phy_rank) ) { // primary rank
+    if ( is_alive(get_replica_rank(phy_rank)) ) { // replica partner is alive
+      if ( is_alive(source) ) {
+	// primary <=== primary
+	_wrap_py_return_val = PMPI_Recv( buf, count, datatype, source, tag, comm, status );
+	Debug( "Parallel Protocol: rank %d <=== rank %d", phy_rank, source );
+      } else {
+	// primary <=== replica
+	_wrap_py_return_val = PMPI_Recv( buf, count, datatype, source_replica, tag, comm, status );
+	Debug( "Parallel Protocol: rank %d <=== rank %d", phy_rank, source_replica );
+      }
+    } else { // degrade to mirror protocol
+      _wrap_py_return_val = Mirror_Recv( buf, count, datatype, source, tag, comm, status );
+    }
+  } else { // replica partner
+    if ( is_alive(user_rank) ) { // primary partner is alive
+      if ( is_alive(source_replica) ) {
+	// replica <=== replica
+	_wrap_py_return_val = PMPI_Recv( buf, count, datatype, source_replica, tag, comm, status );
+	Debug( "Parallel Protocol: rank %d <=== rank %d", phy_rank, source_replica );
+      } else {
+	// primary <=== replica
+	_wrap_py_return_val = PMPI_Recv( buf, count, datatype, source, tag, comm, status );
+	Debug( "Parallel Protocol: rank %d <=== rank %d", phy_rank, source );
+      }
+    } else { // degrade to mirror protocol
+      _wrap_py_return_val = Mirror_Recv( buf, count, datatype, source, tag, comm, status );
+    }
+  }
+  return _wrap_py_return_val;
+}
+
 _EXTERN_C_ void pmpi_init(MPI_Fint *ierr);
 _EXTERN_C_ void PMPI_INIT(MPI_Fint *ierr);
 _EXTERN_C_ void pmpi_init_(MPI_Fint *ierr);
@@ -225,13 +308,6 @@ _EXTERN_C_ int MPI_Init(int *argc, char ***argv) {
     rank_states[ i ] = 1; // all alive initially
   }
 
-  // assign primary ranks as leaders initially
-  if ( is_primary(phy_rank) ) {
-    is_leader = 'Y';
-  } else {
-    is_leader = 'N';
-  }
-
   return _wrap_py_return_val;
 }
 
@@ -246,8 +322,10 @@ _EXTERN_C_ int MPI_Send(void *buf, int count, MPI_Datatype datatype, int dest, i
     return 0;
   }
 
-  if ( 1 ) {
+  if ( 0 ) {
     _wrap_py_return_val = Mirror_Send( buf, count, datatype, dest, tag, comm );
+  } else {
+    _wrap_py_return_val = Parallel_Send( buf, count, datatype, dest, tag, comm );
   }
   
   return _wrap_py_return_val;
@@ -264,8 +342,10 @@ _EXTERN_C_ int MPI_Recv(void *buf, int count, MPI_Datatype datatype, int source,
     return 0;
   }
 
-  if ( 1 ) {
+  if ( 0 ) {
     _wrap_py_return_val = Mirror_Recv( buf, count, datatype, source, tag, comm, status );
+  } else {
+    _wrap_py_return_val = Parallel_Recv( buf, count, datatype, source, tag, comm, status );
   }
 
   return _wrap_py_return_val;
