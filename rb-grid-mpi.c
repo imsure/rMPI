@@ -67,6 +67,22 @@ int main(int argc, char *argv[])
     compute_grid_black( grid, gridsize+2, strip_size+2, myrank );
     // send updates to neighbors
     exchange_rows( grid, gridsize+2, strip_size+2, myrank );
+
+    // intentionally kill nodes for testing
+    if ( iter == num_iters/2 ) {
+      int i;
+      // kill all primary nodes
+      //for ( i = 0; i < numnodes; ++i ) MPI_Pcontrol( i );
+      
+      // kill all replica nodes
+      // for ( i = 0; i < num_nodes; ++i ) MPI_Pcontrol( i+num_nodes );
+
+      // kill a replica node and a primary node
+      MPI_Pcontrol( 0 );
+      MPI_Pcontrol( 6 );
+
+      MPI_Barrier( MPI_COMM_WORLD );
+    }
   }
 
   double maxdiff, maxdiff_global;
@@ -74,7 +90,7 @@ int main(int argc, char *argv[])
   exchange_rows( grid, gridsize+2, strip_size+2, myrank );
   maxdiff = compute_grid_black_max( grid, gridsize+2, strip_size+2, myrank, maxdiff );
 
-  MPI_Reduce(&maxdiff, &maxdiff_global, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
+  //MPI_Reduce(&maxdiff, &maxdiff_global, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
   //print_grid( grid, myrank, gridsize+2, strip_size+2, num_nodes );
 
   // stop timer
