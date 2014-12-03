@@ -80,59 +80,13 @@ static int mask_red_tag( int tag )
   return tag | RED_TAG_MASK;
 }
 
-_EXTERN_C_ void pmpi_init(MPI_Fint *ierr);
-_EXTERN_C_ void PMPI_INIT(MPI_Fint *ierr);
-_EXTERN_C_ void pmpi_init_(MPI_Fint *ierr);
-_EXTERN_C_ void pmpi_init__(MPI_Fint *ierr);
-
-/* ================== C Wrappers for MPI_Init ================== */
-_EXTERN_C_ int PMPI_Init(int *argc, char ***argv);
-_EXTERN_C_ int MPI_Init(int *argc, char ***argv) { 
-  int _wrap_py_return_val = 0;
-  int i;
-    
-  _wrap_py_return_val = PMPI_Init(argc, argv);
-
-  // Get the number of physical ranks.
-  PMPI_Comm_size( MPI_COMM_WORLD, &num_phy_ranks );
-  if ( num_phy_ranks % 2 != 0 ) {
-    fprintf( stderr, "Specified number of ranks must be even!\n " );
-    MPI_Abort( MPI_COMM_WORLD, -1 );
-  }
-  num_ranks = num_phy_ranks >> 1; // divide by two
-  PMPI_Comm_rank( MPI_COMM_WORLD, &phy_rank ); // get the physical rank
-  user_rank = phy_rank < num_ranks ? phy_rank : phy_rank-num_ranks;
-
-  //Debug( "num_user_rank=%d num_physical_rank=%d", num_ranks, num_phy_ranks );
-  Debug( "user_rank=%d physical_rank=%d", user_rank, phy_rank );
-
-  // allocate space for ranks states and initialize
-  rank_states = (int *) malloc( num_phy_ranks * sizeof(int) );
-  for ( i = 0; i < num_phy_ranks; ++i ) {
-    rank_states[ i ] = 1; // all alive initially
-  }
-
-  // assign primary ranks as leaders initially
-  if ( is_primary(phy_rank) ) {
-    is_leader = 'Y';
-  } else {
-    is_leader = 'N';
-  }
-
-  return _wrap_py_return_val;
-}
-
-/* ================== C Wrappers for MPI_Send ================== */
-_EXTERN_C_ int PMPI_Send(void *buf, int count, MPI_Datatype datatype, int dest, int tag, MPI_Comm comm);
-_EXTERN_C_ int MPI_Send(void *buf, int count, MPI_Datatype datatype, int dest, int tag, MPI_Comm comm) { 
+/**
+ * Mirror protocol --- MPI_Send
+ */
+static int Mirror_Send(void *buf, int count, MPI_Datatype datatype, int dest, int tag, MPI_Comm comm)
+{
   int _wrap_py_return_val = 0;
   int dest_replica = get_replica_rank( dest );
-
-  /* check aliveness */
-  if ( !is_alive(phy_rank) ) {
-    Debug( "rank %d has died. Return immediately", phy_rank );
-    return 0;
-  }
 
   /* Mirror Protocol */
   if ( !is_primary(phy_rank) && is_alive(user_rank) ) {
@@ -151,22 +105,16 @@ _EXTERN_C_ int MPI_Send(void *buf, int count, MPI_Datatype datatype, int dest, i
     _wrap_py_return_val = PMPI_Send(buf, count, datatype, dest_replica, tag, MPI_COMM_WORLD);
     //Debug( "rank %d sending to rank %d", phy_rank, dest_replica );
   }
-  
-  return _wrap_py_return_val;
 }
 
-/* ================== C Wrappers for MPI_Recv ================== */
-_EXTERN_C_ int PMPI_Recv(void *buf, int count, MPI_Datatype datatype, int source, int tag, MPI_Comm comm, MPI_Status *status);
-_EXTERN_C_ int MPI_Recv(void *buf, int count, MPI_Datatype datatype, int source, int tag, MPI_Comm comm, MPI_Status *status) { 
+/**
+ * Mirror protocol --- MPI_Recv
+ */
+static int Mirror_Recv(void *buf, int count, MPI_Datatype datatype, int source, int tag, MPI_Comm comm, MPI_Status *status)
+{
   int _wrap_py_return_val = 0;
   int source_replica;
   int matching_src = -1; // hold the source which sent the message to the leader first
-
-  /* check aliveness */
-  if ( !is_alive(phy_rank) ) {
-    Debug( "rank %d has died. Return immediately", phy_rank );
-    return 0;
-  }
 
   /* Mirror Protocol */
   if ( source == MPI_ANY_SOURCE ) {
@@ -208,7 +156,7 @@ _EXTERN_C_ int MPI_Recv(void *buf, int count, MPI_Datatype datatype, int source,
 	_wrap_py_return_val = PMPI_Recv(buf, count, datatype, matching_src, tag, comm, status);
 
 	if ( is_primary(matching_src) ) {
-	// receive from the replica of 'matching_src' if the replica is alive
+	  // receive from the replica of 'matching_src' if the replica is alive
 	  if ( is_alive(get_replica_rank(matching_src)) ) {
 	    _wrap_py_return_val = PMPI_Recv(buf, count, datatype, get_replica_rank(matching_src),
 					    mask_red_tag(tag), comm, status);
@@ -244,7 +192,82 @@ _EXTERN_C_ int MPI_Recv(void *buf, int count, MPI_Datatype datatype, int source,
       Debug( "rank %d <=== rank %d\ttag: 0x%x", phy_rank, source_replica, mask_red_tag(tag) );
     }
   }
+}
+
+_EXTERN_C_ void pmpi_init(MPI_Fint *ierr);
+_EXTERN_C_ void PMPI_INIT(MPI_Fint *ierr);
+_EXTERN_C_ void pmpi_init_(MPI_Fint *ierr);
+_EXTERN_C_ void pmpi_init__(MPI_Fint *ierr);
+
+/* ================== C Wrappers for MPI_Init ================== */
+_EXTERN_C_ int PMPI_Init(int *argc, char ***argv);
+_EXTERN_C_ int MPI_Init(int *argc, char ***argv) { 
+  int _wrap_py_return_val = 0, i;
+    
+  _wrap_py_return_val = PMPI_Init(argc, argv);
+
+  // Get the number of physical ranks.
+  PMPI_Comm_size( MPI_COMM_WORLD, &num_phy_ranks );
+  if ( num_phy_ranks % 2 != 0 ) {
+    fprintf( stderr, "Specified number of ranks must be even!\n " );
+    MPI_Abort( MPI_COMM_WORLD, -1 );
+  }
+  num_ranks = num_phy_ranks >> 1; // divide by two
+  PMPI_Comm_rank( MPI_COMM_WORLD, &phy_rank ); // get the physical rank
+  user_rank = phy_rank < num_ranks ? phy_rank : phy_rank-num_ranks;
+
+  //Debug( "num_user_rank=%d num_physical_rank=%d", num_ranks, num_phy_ranks );
+  Debug( "user_rank=%d physical_rank=%d", user_rank, phy_rank );
+
+  // allocate space for ranks states and initialize
+  rank_states = (int *) malloc( num_phy_ranks * sizeof(int) );
+  for ( i = 0; i < num_phy_ranks; ++i ) {
+    rank_states[ i ] = 1; // all alive initially
+  }
+
+  // assign primary ranks as leaders initially
+  if ( is_primary(phy_rank) ) {
+    is_leader = 'Y';
+  } else {
+    is_leader = 'N';
+  }
+
+  return _wrap_py_return_val;
+}
+
+/* ================== C Wrappers for MPI_Send ================== */
+_EXTERN_C_ int PMPI_Send(void *buf, int count, MPI_Datatype datatype, int dest, int tag, MPI_Comm comm);
+_EXTERN_C_ int MPI_Send(void *buf, int count, MPI_Datatype datatype, int dest, int tag, MPI_Comm comm) { 
+  int _wrap_py_return_val = 0;
+
+  /* check aliveness */
+  if ( !is_alive(phy_rank) ) {
+    Debug( "rank %d has died. Return immediately", phy_rank );
+    return 0;
+  }
+
+  if ( 1 ) {
+    _wrap_py_return_val = Mirror_Send( buf, count, datatype, dest, tag, comm );
+  }
   
+  return _wrap_py_return_val;
+}
+
+/* ================== C Wrappers for MPI_Recv ================== */
+_EXTERN_C_ int PMPI_Recv(void *buf, int count, MPI_Datatype datatype, int source, int tag, MPI_Comm comm, MPI_Status *status);
+_EXTERN_C_ int MPI_Recv(void *buf, int count, MPI_Datatype datatype, int source, int tag, MPI_Comm comm, MPI_Status *status) { 
+  int _wrap_py_return_val;
+  
+  /* check aliveness */
+  if ( !is_alive(phy_rank) ) {
+    Debug( "rank %d has died. Return immediately", phy_rank );
+    return 0;
+  }
+
+  if ( 1 ) {
+    _wrap_py_return_val = Mirror_Recv( buf, count, datatype, source, tag, comm, status );
+  }
+
   return _wrap_py_return_val;
 }
 
