@@ -40,6 +40,7 @@ _EXTERN_C_ void *MPIR_ToPointer(int);
 #define RED_TAG_MASK 0x1 << 11 // tag mask for redundant messages
 #define TAG_Barrier 0xff // for MPI_Barrier only
 #define TAG_META 0xfe // for leader(primary) and replica to exchange meta-data
+#define TAG_SYNC 0xfd // for parallel protocol
 
 /* Global variables */
 MPI_Comm primary_comm; // communicator for primary ranks
@@ -206,6 +207,10 @@ static int Parallel_Send(void *buf, int count, MPI_Datatype datatype, int dest, 
 
   if ( is_primary(phy_rank) ) {
     if ( is_alive(get_replica_rank(phy_rank)) ) { // replica partner is alive
+      /* sync with replica */
+      PMPI_Send( &sync, 1, MPI_INT, get_replica_rank(phy_rank), TAG_SYNC, MPI_COMM_WORLD );
+      Debug( "sync: rank %d ===> rank %d", phy_rank, get_replica_rank(phy_rank) );
+
       if ( is_alive(dest) ) {
 	// primary ===> primary
 	_wrap_py_return_val = PMPI_Send(buf, count, datatype, dest, tag, MPI_COMM_WORLD);
@@ -217,7 +222,9 @@ static int Parallel_Send(void *buf, int count, MPI_Datatype datatype, int dest, 
       }
 
       /* sync with replica */
-      
+      PMPI_Recv( &sync, 1, MPI_INT, get_replica_rank(phy_rank),
+		 TAG_SYNC, MPI_COMM_WORLD, MPI_STATUS_IGNORE );
+      Debug( "sync: rank %d <=== rank %d", phy_rank, get_replica_rank(phy_rank) );
       
     } else { // if replica died, degrade to mirror protocol
       Debug( "Rank %d is degrading to mirror send because its partner %d has died.",
@@ -226,6 +233,10 @@ static int Parallel_Send(void *buf, int count, MPI_Datatype datatype, int dest, 
     }
   } else { // replica of the primary sender
     if ( is_alive(user_rank) ) { // primary partner is alive
+      /* sync with primary */
+      PMPI_Recv( &sync, 1, MPI_INT, user_rank, TAG_SYNC, MPI_COMM_WORLD, MPI_STATUS_IGNORE );
+      Debug( "sync: rank %d <=== rank %d", user_rank, phy_rank );
+
       if ( is_alive(dest_replica) ) {
 	// replica ===> replica
 	_wrap_py_return_val = PMPI_Send(buf, count, datatype, dest_replica, tag, MPI_COMM_WORLD);
@@ -235,6 +246,11 @@ static int Parallel_Send(void *buf, int count, MPI_Datatype datatype, int dest, 
 	_wrap_py_return_val = PMPI_Send(buf, count, datatype, dest, tag, MPI_COMM_WORLD);
 	Debug( "Parallel Protocol: rank %d ===> rank %d", phy_rank, dest );
       }
+
+      /* sync with primary */
+      PMPI_Send( &sync, 1, MPI_INT, user_rank, TAG_SYNC, MPI_COMM_WORLD );
+      Debug( "sync: rank %d ===> rank %d", phy_rank, user_rank );
+
     } else { // if primary died, degrade to mirror protocol
       Debug( "Rank %d is degrading to mirror send because its partner %d has died.",
 	     phy_rank, user_rank );
