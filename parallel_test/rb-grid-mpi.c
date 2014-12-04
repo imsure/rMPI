@@ -79,6 +79,9 @@ int main(int argc, char *argv[])
 
       // kill a replica node and a primary node
       MPI_Pcontrol( 0 );
+      MPI_Pcontrol( 1 );
+      //MPI_Pcontrol( 2 );
+      MPI_Pcontrol( 3 );
       MPI_Pcontrol( 6 );
 
       MPI_Barrier( MPI_COMM_WORLD );

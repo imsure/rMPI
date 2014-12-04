@@ -49,7 +49,7 @@ int num_phy_ranks;
 int user_rank; // rank seen by users
 int phy_rank; // physical rank
 int *rank_states; // array for rank states, 1 is alive, 0 is dead.
-int mirror_protocol = 1;
+int mirror_protocol = 0;
 
 /* Return whether or not the current rank is a primary rank
    or a replica rank. */
@@ -185,7 +185,8 @@ static int Mirror_Recv(void *buf, int count, MPI_Datatype datatype, int source, 
     if ( is_alive(source) ) { // post a recv for primary source 
       _wrap_py_return_val = PMPI_Recv(buf, count, datatype, source, tag, comm, status);
       Debug( "rank %d <=== rank %d\ttag: 0x%x", phy_rank, source, tag );
-      tag = mask_red_tag( tag ); // only mask the tag when the primary rank is alive
+      if ( mirror_protocol )
+	tag = mask_red_tag( tag ); // only mask the tag when the primary rank is alive
     }
     if ( is_alive(source_replica) ) { // post a recv for replica of source
       _wrap_py_return_val = PMPI_Recv(buf, count, datatype, source_replica, tag, comm, status);
@@ -200,6 +201,7 @@ static int Mirror_Recv(void *buf, int count, MPI_Datatype datatype, int source, 
 static int Parallel_Send(void *buf, int count, MPI_Datatype datatype, int dest, int tag, MPI_Comm comm)
 {
   int _wrap_py_return_val = 0;
+  int sync = 1; // a sync message between primary and replica sender
   int dest_replica = get_replica_rank( dest );
 
   if ( is_primary(phy_rank) ) {
@@ -214,10 +216,13 @@ static int Parallel_Send(void *buf, int count, MPI_Datatype datatype, int dest, 
 	Debug( "Parallel Protocol: rank %d ===> rank %d", phy_rank, dest_replica );
       }
 
-      /* TODO: sync with replica */
+      /* sync with replica */
+      
       
     } else { // if replica died, degrade to mirror protocol
-      	_wrap_py_return_val = Mirror_Send(buf, count, datatype, dest, tag, MPI_COMM_WORLD);
+      Debug( "Rank %d is degrading to mirror send because its partner %d has died.",
+	     phy_rank, get_replica_rank(phy_rank) );
+      _wrap_py_return_val = Mirror_Send(buf, count, datatype, dest, tag, MPI_COMM_WORLD);
     }
   } else { // replica of the primary sender
     if ( is_alive(user_rank) ) { // primary partner is alive
@@ -231,10 +236,12 @@ static int Parallel_Send(void *buf, int count, MPI_Datatype datatype, int dest, 
 	Debug( "Parallel Protocol: rank %d ===> rank %d", phy_rank, dest );
       }
     } else { // if primary died, degrade to mirror protocol
-      	_wrap_py_return_val = Mirror_Send(buf, count, datatype, dest, tag, MPI_COMM_WORLD);
+      Debug( "Rank %d is degrading to mirror send because its partner %d has died.",
+	     phy_rank, user_rank );
+      _wrap_py_return_val = Mirror_Send(buf, count, datatype, dest, tag, MPI_COMM_WORLD);
     }
   }
-    return _wrap_py_return_val;
+  return _wrap_py_return_val;
 }
 
 /**
@@ -258,6 +265,8 @@ static int Parallel_Recv(void *buf, int count, MPI_Datatype datatype, int source
 	Debug( "Parallel Protocol: rank %d <=== rank %d", phy_rank, source_replica );
       }
     } else { // degrade to mirror protocol
+      Debug( "Rank %d is degrading to mirror recv because its partner %d has died.",
+	     phy_rank, get_replica_rank(phy_rank) );
       _wrap_py_return_val = Mirror_Recv( buf, count, datatype, source, tag, comm, status );
     }
   } else { // replica partner
@@ -272,6 +281,8 @@ static int Parallel_Recv(void *buf, int count, MPI_Datatype datatype, int source
 	Debug( "Parallel Protocol: rank %d <=== rank %d", phy_rank, source );
       }
     } else { // degrade to mirror protocol
+      Debug( "Rank %d is degrading to mirror recv because its partner %d has died.",
+	     phy_rank, user_rank );
       _wrap_py_return_val = Mirror_Recv( buf, count, datatype, source, tag, comm, status );
     }
   }
