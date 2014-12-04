@@ -50,7 +50,7 @@ int num_phy_ranks;
 int user_rank; // rank seen by users
 int phy_rank; // physical rank
 int *rank_states; // array for rank states, 1 is alive, 0 is dead.
-int mirror_protocol = 0;
+int mirror_protocol = 1;
 
 /* Return whether or not the current rank is a primary rank
    or a replica rank. */

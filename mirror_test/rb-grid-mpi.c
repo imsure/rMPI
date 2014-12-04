@@ -72,14 +72,14 @@ int main(int argc, char *argv[])
     if ( iter == num_iters/2 ) {
       int i;
       // kill all primary nodes
-      //for ( i = 0; i < numnodes; ++i ) MPI_Pcontrol( i );
+      for ( i = 0; i < num_nodes; ++i ) MPI_Pcontrol( i );
       
       // kill all replica nodes
       // for ( i = 0; i < num_nodes; ++i ) MPI_Pcontrol( i+num_nodes );
 
       // kill a replica node and a primary node
-      MPI_Pcontrol( 0 );
-      MPI_Pcontrol( 6 );
+      //      MPI_Pcontrol( 0 );
+      //      MPI_Pcontrol( 6 );
 
       MPI_Barrier( MPI_COMM_WORLD );
     }
