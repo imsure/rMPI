@@ -117,7 +117,6 @@ static int Mirror_Recv(void *buf, int count, MPI_Datatype datatype, int source, 
   int source_replica;
   int matching_src = -1; // hold the source which sent the message to the leader first
 
-  /* Mirror Protocol */
   if ( source == MPI_ANY_SOURCE ) {
     MPI_Status tmp_status; // in case 'status' passed by caller is NULL
     Debug( "Processing MPI_ANY_SOURCE ......" );
@@ -139,7 +138,8 @@ static int Mirror_Recv(void *buf, int count, MPI_Datatype datatype, int source, 
 	       phy_rank, replica_rank, matching_src );
       }
 
-      if ( is_primary(matching_src) ) {
+      // if matching src is a replica, that means the primary has died, no need to handle else ...
+      if ( is_primary(matching_src) ) { 
 	// receive from the replica of 'matching_src' if the replica is alive
 	if ( is_alive(get_replica_rank(matching_src)) ) { 
 	  _wrap_py_return_val = PMPI_Recv(buf, count, datatype, get_replica_rank(matching_src),
@@ -269,39 +269,110 @@ static int Parallel_Recv(void *buf, int count, MPI_Datatype datatype, int source
   int matching_src = -1; // hold the source which sent the message to the leader first
   int source_replica = get_replica_rank( source );
 
-  if ( is_primary(phy_rank) ) { // primary rank
-    if ( is_alive(get_replica_rank(phy_rank)) ) { // replica partner is alive
-      if ( is_alive(source) ) {
-	// primary <=== primary
-	_wrap_py_return_val = PMPI_Recv( buf, count, datatype, source, tag, comm, status );
-	Debug( "Parallel Protocol: rank %d <=== rank %d", phy_rank, source );
-      } else {
-	// primary <=== replica
-	_wrap_py_return_val = PMPI_Recv( buf, count, datatype, source_replica, tag, comm, status );
-	Debug( "Parallel Protocol: rank %d <=== rank %d", phy_rank, source_replica );
+  if ( source == MPI_ANY_SOURCE ) {
+    MPI_Status tmp_status; // in case 'status' passed by caller is NULL
+    Debug( "Parallel: Processing MPI_ANY_SOURCE ......" );
+    
+    if ( is_primary(phy_rank) ) { // leader is also the primary rank
+      int replica_rank = get_replica_rank( user_rank );
+      // post a recv for any source.
+      _wrap_py_return_val = PMPI_Recv(buf, count, datatype, source, tag, comm, &tmp_status);
+      if ( status != NULL ) {
+	*status = tmp_status; // setting status if it is not null
       }
-    } else { // degrade to mirror protocol
-      Debug( "Rank %d is degrading to mirror recv because its partner %d has died.",
-	     phy_rank, get_replica_rank(phy_rank) );
-      _wrap_py_return_val = Mirror_Recv( buf, count, datatype, source, tag, comm, status );
+      matching_src = tmp_status.MPI_SOURCE; // get the source rank first arrived.
+      Debug( "Parallel: Leader %d <=== Matching sender(MPI_ANY_SOURCE) %d", phy_rank, matching_src );
+
+      if ( is_alive(replica_rank) ) {
+	// send metadata to replica of the leader
+	_wrap_py_return_val = PMPI_Send( &matching_src, 1, MPI_INT, replica_rank, TAG_META, MPI_COMM_WORLD );
+	Debug( "Parallel: Leader rank %d ===> replica %d, matching sender of MPI_ANY_SOURCE: %d",
+	       phy_rank, replica_rank, matching_src );
+      } else { // if replica is not alive, must post a recv for the redundant message
+	int temp_rank;
+	if ( is_primary(matching_src) ) {
+	  // receive from the replica of 'matching_src' if the replica is alive
+	  if ( is_alive(get_replica_rank(matching_src)) ) { 
+	    _wrap_py_return_val = PMPI_Recv(buf, count, datatype, get_replica_rank(matching_src),
+					    tag, comm, status);
+	  }
+	} else {
+	  temp_rank = matching_src - num_ranks;
+	  if ( is_alive(temp_rank) ) { 
+	    _wrap_py_return_val = PMPI_Recv(buf, count, datatype, temp_rank, tag, comm, status);
+	  }
+	}
+      }
+    } else { // non-leader: replica
+      // first check if the leader is alive
+      if ( is_alive(user_rank) ) {
+	// post a recv to get the matching sender from the leader
+	_wrap_py_return_val = PMPI_Recv( &matching_src, 1, MPI_INT, user_rank, TAG_META, MPI_COMM_WORLD, status );
+	Debug( "Parallel: replica %d <=== leader rank %d, matching sender of MPI_ANY_SOURCE: %d",
+	       phy_rank, user_rank, matching_src );
+	// recv data from the matching sender's replica.
+	_wrap_py_return_val = PMPI_Recv(buf, count, datatype, get_replica_rank(matching_src), tag, comm, status);
+	/* No other work needs to be done because both primary and replica rank are alive. Life is easy! */
+	
+      } else { // leader already died, replica will do the leader's work except no meta-data needs to be sent.
+	// post a recv for any source. it must be from primary rank because redundant message's tag must be masked.
+	_wrap_py_return_val = PMPI_Recv(buf, count, datatype, source, tag, comm, &tmp_status);
+	matching_src = tmp_status.MPI_SOURCE; // get the source rank first arrived.
+	if ( status != NULL ) {
+	  *status = tmp_status; // setting status if it is not null
+	}
+
+	if ( is_primary(matching_src) ) {
+	  // receive from the replica of 'matching_src' if the replica is alive
+	  if ( is_alive(get_replica_rank(matching_src)) ) {
+	    _wrap_py_return_val = PMPI_Recv(buf, count, datatype, get_replica_rank(matching_src),
+					    tag, comm, status);
+	    Debug( "Parallel: Matching sender %d <=== replica rank %d", matching_src, phy_rank );
+	  }
+	} else {
+	  int temp_rank = matching_src - num_ranks;
+	  if ( is_alive(temp_rank) ) { 
+	    _wrap_py_return_val = PMPI_Recv(buf, count, datatype, temp_rank, tag, comm, status);
+	  }
+	}
+      }
     }
-  } else { // replica partner
-    if ( is_alive(user_rank) ) { // primary partner is alive
-      if ( is_alive(source_replica) ) {
-	// replica <=== replica
-	_wrap_py_return_val = PMPI_Recv( buf, count, datatype, source_replica, tag, comm, status );
-	Debug( "Parallel Protocol: rank %d <=== rank %d", phy_rank, source_replica );
-      } else {
-	// primary <=== replica
-	_wrap_py_return_val = PMPI_Recv( buf, count, datatype, source, tag, comm, status );
-	Debug( "Parallel Protocol: rank %d <=== rank %d", phy_rank, source );
+  } else { // normal case: source != MPI_ANY_SOURCE
+    if ( is_primary(phy_rank) ) { // primary rank
+      if ( is_alive(get_replica_rank(phy_rank)) ) { // replica partner is alive
+	if ( is_alive(source) ) {
+	  // primary <=== primary
+	  _wrap_py_return_val = PMPI_Recv( buf, count, datatype, source, tag, comm, status );
+	  Debug( "Parallel Protocol: rank %d <=== rank %d", phy_rank, source );
+	} else {
+	  // primary <=== replica
+	  _wrap_py_return_val = PMPI_Recv( buf, count, datatype, source_replica, tag, comm, status );
+	  Debug( "Parallel Protocol: rank %d <=== rank %d", phy_rank, source_replica );
+	}
+      } else { // degrade to mirror protocol
+	Debug( "Rank %d is degrading to mirror recv because its partner %d has died.",
+	       phy_rank, get_replica_rank(phy_rank) );
+	_wrap_py_return_val = Mirror_Recv( buf, count, datatype, source, tag, comm, status );
       }
-    } else { // degrade to mirror protocol
-      Debug( "Rank %d is degrading to mirror recv because its partner %d has died.",
-	     phy_rank, user_rank );
-      _wrap_py_return_val = Mirror_Recv( buf, count, datatype, source, tag, comm, status );
+    } else { // replica partner
+      if ( is_alive(user_rank) ) { // primary partner is alive
+	if ( is_alive(source_replica) ) {
+	  // replica <=== replica
+	  _wrap_py_return_val = PMPI_Recv( buf, count, datatype, source_replica, tag, comm, status );
+	  Debug( "Parallel Protocol: rank %d <=== rank %d", phy_rank, source_replica );
+	} else {
+	  // primary <=== replica
+	  _wrap_py_return_val = PMPI_Recv( buf, count, datatype, source, tag, comm, status );
+	  Debug( "Parallel Protocol: rank %d <=== rank %d", phy_rank, source );
+	}
+      } else { // degrade to mirror protocol
+	Debug( "Rank %d is degrading to mirror recv because its partner %d has died.",
+	       phy_rank, user_rank );
+	_wrap_py_return_val = Mirror_Recv( buf, count, datatype, source, tag, comm, status );
+      }
     }
   }
+    
   return _wrap_py_return_val;
 }
 
