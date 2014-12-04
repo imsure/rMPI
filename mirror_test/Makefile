@@ -14,4 +14,4 @@ test_rb: rb-grid-mpi.c $(rMPI)
 	$(CC) -o test_rb rb-grid-mpi.c $(rMPI)
 
 clean:
-	rm test_normal test_anysource test_rb
+	rm test_normal test_anysource test_rb test_anysource2

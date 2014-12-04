@@ -1,5 +1,6 @@
 /**
  * Redundant MPI.
+ * Shuo Yang
  */
 
 #include <mpi.h>
@@ -418,7 +419,7 @@ _EXTERN_C_ int MPI_Init(int *argc, char ***argv) {
     } else {
       fprintf( stderr, "Invalid protocol type: %s!!!. Using mirror protocol by default.\n", protocol );
     }
-    printf( "Using protocol: %s\n", protocol );
+    //printf( "Using protocol: %s\n", protocol );
   }
 
   return _wrap_py_return_val;
