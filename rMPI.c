@@ -49,8 +49,8 @@ int num_ranks;
 int num_phy_ranks;
 int user_rank; // rank seen by users
 int phy_rank; // physical rank
-int *rank_states; // array for rank states, 1 is alive, 0 is dead.
-int mirror_protocol = 1;
+int *rank_states; // array for rank states, 1 is alive, 0 is dead
+int mirror_protocol = 1; // use mirror protocol as the default
 
 /* Return whether or not the current rank is a primary rank
    or a replica rank. */
@@ -385,6 +385,7 @@ _EXTERN_C_ void pmpi_init__(MPI_Fint *ierr);
 _EXTERN_C_ int PMPI_Init(int *argc, char ***argv);
 _EXTERN_C_ int MPI_Init(int *argc, char ***argv) { 
   int _wrap_py_return_val = 0, i;
+  char *protocol;
     
   _wrap_py_return_val = PMPI_Init(argc, argv);
 
@@ -405,6 +406,19 @@ _EXTERN_C_ int MPI_Init(int *argc, char ***argv) {
   rank_states = (int *) malloc( num_phy_ranks * sizeof(int) );
   for ( i = 0; i < num_phy_ranks; ++i ) {
     rank_states[ i ] = 1; // all alive initially
+  }
+
+  // retrieve the env variable PROTOCOL_TYPE if exists
+  protocol = getenv( "PROTOCOL_TYPE" );
+  if ( protocol ) {
+    if ( strcmp(protocol, "MIRRORED") == 0 ) {
+      mirror_protocol = 1; // use mirror protocol
+    } else if ( strcmp(protocol, "PARALLEL") == 0 ) {
+      mirror_protocol = 0; // use parallel protocol
+    } else {
+      fprintf( stderr, "Invalid protocol type: %s!!!. Using mirror protocol by default.\n", protocol );
+    }
+    printf( "Using protocol: %s\n", protocol );
   }
 
   return _wrap_py_return_val;
