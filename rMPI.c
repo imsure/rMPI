@@ -28,7 +28,7 @@ _EXTERN_C_ void *MPIR_ToPointer(int);
 #endif /* PIC */
 
 #define NDEBUG
-#undef NDEBUG
+//#undef NDEBUG
 
 #ifdef NDEBUG
 #define Debug(M, ...)
@@ -49,6 +49,7 @@ int num_phy_ranks;
 int user_rank; // rank seen by users
 int phy_rank; // physical rank
 int *rank_states; // array for rank states, 1 is alive, 0 is dead.
+int mirror_protocol = 1;
 
 /* Return whether or not the current rank is a primary rank
    or a replica rank. */
@@ -322,7 +323,7 @@ _EXTERN_C_ int MPI_Send(void *buf, int count, MPI_Datatype datatype, int dest, i
     return 0;
   }
 
-  if ( 0 ) {
+  if ( mirror_protocol ) {
     _wrap_py_return_val = Mirror_Send( buf, count, datatype, dest, tag, comm );
   } else {
     _wrap_py_return_val = Parallel_Send( buf, count, datatype, dest, tag, comm );
@@ -342,7 +343,7 @@ _EXTERN_C_ int MPI_Recv(void *buf, int count, MPI_Datatype datatype, int source,
     return 0;
   }
 
-  if ( 0 ) {
+  if ( mirror_protocol ) {
     _wrap_py_return_val = Mirror_Recv( buf, count, datatype, source, tag, comm, status );
   } else {
     _wrap_py_return_val = Parallel_Recv( buf, count, datatype, source, tag, comm, status );
