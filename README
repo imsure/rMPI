@@ -1,0 +1,28 @@
+Directory structure:
+
+rMPI.c ---------- Redundant MPI implementation
+results.pdf ----- Protocols performance discussion
+cmp_test/ ------- Test cases for protocol performance tests
+mirror_test/ ---- Test cases for mirror protocol
+parallel_test/ -- Test cases for parallel protocol
+results/ -------- plots and data files
+Makefile -------- To compile app given app.c
+run.sh ---------- Run script
+
+How to run:
+
+1. Copy any of your test file into current directory and rename it to app.c
+2. Compile your app.c with rMPI.c:
+   $ make app
+3. Export environment variable PROTOCOL_TYPE:
+   $ export PROTOCOL_TYPE=MIRRORED
+   or
+   $ export PROTOCOL_TYPE=PARALLEL
+4. Run your app:
+   $ mpirun -x PROTOCOL_TYPE -np 8 --hostfile hostfile ./app
+
+You can also run your app with run.sh after compiling app.c:
+$ ./run.sh app MIRRORED
+or
+$ ./run.sh app PARALLEL
+
