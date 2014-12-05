@@ -69,13 +69,13 @@ int main( int argc, char *argv[] )
   MPI_Barrier( MPI_COMM_WORLD );
 
   sr_normal( myrank, numtasks );
-  //  sr_anysource( myrank, numtasks );
+  sr_anysource( myrank, numtasks );
 
   MPI_Pcontrol( 7 ); // kill a replica node
   MPI_Barrier( MPI_COMM_WORLD );
 
   sr_normal( myrank, numtasks );
-  //  sr_anysource( myrank, numtasks );
+  sr_anysource( myrank, numtasks );
 
   if (myrank == 0) {
     end = MPI_Wtime();

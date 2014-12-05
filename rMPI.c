@@ -282,7 +282,7 @@ static int Parallel_Recv(void *buf, int count, MPI_Datatype datatype, int source
 	*status = tmp_status; // setting status if it is not null
       }
       matching_src = tmp_status.MPI_SOURCE; // get the source rank first arrived.
-      Debug( "Parallel: Leader %d <=== Matching sender(MPI_ANY_SOURCE) %d", phy_rank, matching_src );
+      Debug( "Parallel: Leader %d <=== Matching sender(MPI_ANY_SOURCE) %d\n", phy_rank, matching_src );
 
       if ( is_alive(replica_rank) ) {
 	// send metadata to replica of the leader
@@ -290,16 +290,17 @@ static int Parallel_Recv(void *buf, int count, MPI_Datatype datatype, int source
 	Debug( "Parallel: Leader rank %d ===> replica %d, matching sender of MPI_ANY_SOURCE: %d",
 	       phy_rank, replica_rank, matching_src );
       } else { // if replica is not alive, must post a recv for the redundant message
-	int temp_rank;
 	if ( is_primary(matching_src) ) {
 	  // receive from the replica of 'matching_src' if the replica is alive
-	  if ( is_alive(get_replica_rank(matching_src)) ) { 
+	  if ( is_alive(get_replica_rank(matching_src)) ) {
+	    Debug( "Rank %d: waiting for rank %d......\n", phy_rank, get_replica_rank(matching_src) );
 	    _wrap_py_return_val = PMPI_Recv(buf, count, datatype, get_replica_rank(matching_src),
 					    tag, comm, status);
 	  }
 	} else {
-	  temp_rank = matching_src - num_ranks;
-	  if ( is_alive(temp_rank) ) { 
+	  int temp_rank = matching_src - num_ranks;
+	  if ( is_alive(temp_rank) ) {
+	    Debug( "Rank %d: waiting for rank %d......\n", phy_rank, temp_rank );
 	    _wrap_py_return_val = PMPI_Recv(buf, count, datatype, temp_rank, tag, comm, status);
 	  }
 	}
@@ -309,16 +310,31 @@ static int Parallel_Recv(void *buf, int count, MPI_Datatype datatype, int source
       if ( is_alive(user_rank) ) {
 	// post a recv to get the matching sender from the leader
 	_wrap_py_return_val = PMPI_Recv( &matching_src, 1, MPI_INT, user_rank, TAG_META, MPI_COMM_WORLD, status );
-	Debug( "Parallel: replica %d <=== leader rank %d, matching sender of MPI_ANY_SOURCE: %d",
+	Debug( "Parallel: replica %d <=== leader rank %d, matching sender of MPI_ANY_SOURCE: %d\n",
 	       phy_rank, user_rank, matching_src );
-	// recv data from the matching sender's replica.
-	_wrap_py_return_val = PMPI_Recv(buf, count, datatype, get_replica_rank(matching_src), tag, comm, status);
+	// recv data from the matching sender's replica. how do your know sender is a primary? This is bug!!!
+	// fix: checking if matching sender is a primary or replica
+	if ( is_primary(matching_src) ) {
+	  if ( is_alive(get_replica_rank(matching_src)) ) {
+	    Debug( "Rank %d: waiting for rank %d......\n", phy_rank, get_replica_rank(matching_src) );
+	    _wrap_py_return_val = PMPI_Recv(buf, count, datatype, get_replica_rank(matching_src), tag, comm, status);
+	  } else {
+	    Debug( "Rank %d: waiting for rank %d......\n", phy_rank, matching_src );
+	    _wrap_py_return_val = PMPI_Recv(buf, count, datatype, matching_src, tag, comm, status);
+	  }
+	} else { // if it is a replica, that means its primary partner has died
+	  // just a post recv for it, that's all.
+	  _wrap_py_return_val = PMPI_Recv(buf, count, datatype, matching_src, tag, comm, status);
+	}
 	/* No other work needs to be done because both primary and replica rank are alive. Life is easy! */
 	
       } else { // leader already died, replica will do the leader's work except no meta-data needs to be sent.
 	// post a recv for any source. it must be from primary rank because redundant message's tag must be masked.
 	_wrap_py_return_val = PMPI_Recv(buf, count, datatype, source, tag, comm, &tmp_status);
 	matching_src = tmp_status.MPI_SOURCE; // get the source rank first arrived.
+	Debug( "Parallel: replica %d <=== leader rank %d, matching sender of MPI_ANY_SOURCE: %d\n",
+		phy_rank, user_rank, matching_src );
+		
 	if ( status != NULL ) {
 	  *status = tmp_status; // setting status if it is not null
 	}
@@ -326,14 +342,17 @@ static int Parallel_Recv(void *buf, int count, MPI_Datatype datatype, int source
 	if ( is_primary(matching_src) ) {
 	  // receive from the replica of 'matching_src' if the replica is alive
 	  if ( is_alive(get_replica_rank(matching_src)) ) {
+	    Debug( "Rank %d: waiting for rank %d......\n", phy_rank, get_replica_rank(matching_src) );
 	    _wrap_py_return_val = PMPI_Recv(buf, count, datatype, get_replica_rank(matching_src),
 					    tag, comm, status);
-	    Debug( "Parallel: Matching sender %d <=== replica rank %d", matching_src, phy_rank );
-	  }
+	    Debug( "Parallel: replica rank %d <=== matching sender's partner %d\n", phy_rank, get_replica_rank(matching_src) );
+	  } 
 	} else {
 	  int temp_rank = matching_src - num_ranks;
-	  if ( is_alive(temp_rank) ) { 
+	  if ( is_alive(temp_rank) ) {
+	    Debug( "Rank %d: waiting for rank %d......\n", phy_rank, temp_rank );
 	    _wrap_py_return_val = PMPI_Recv(buf, count, datatype, temp_rank, tag, comm, status);
+	    Debug( "Parallel: replica rank %d <=== matching sender's partner %d\n", phy_rank, temp_rank );
 	  }
 	}
       }

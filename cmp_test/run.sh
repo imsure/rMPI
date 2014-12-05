@@ -1,8 +1,8 @@
 #!/bin/bash
 
 echo "starting $1 .........."
-#export PROTOCOL_TYPE=PARALLEL
-export PROTOCOL_TYPE=MIRRORED
+export PROTOCOL_TYPE=PARALLEL
+#export PROTOCOL_TYPE=MIRRORED
 
 for i in {1..10}
 do
